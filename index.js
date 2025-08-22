@@ -1,10 +1,19 @@
 const express = require('express');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const FormData = require('form-data');
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 // Middleware để parse JSON
 app.use(express.json());
+
+// Thư mục tạm để lưu file
+const TEMP_DIR = path.join(__dirname, 'temp');
+if (!fs.existsSync(TEMP_DIR)) {
+  fs.mkdirSync(TEMP_DIR);
+}
 
 // Route API upload
 app.get('/upload', async (req, res) => {
@@ -16,20 +25,48 @@ app.get('/upload', async (req, res) => {
   }
 
   try {
-    // Gửi yêu cầu tới Catbox API
-    const response = await axios.post('https://catbox.moe/user/api.php', {
-      reqtype: 'urlupload',
-      url: url
-    }, {
+    // Tải file từ URL về server
+    const response = await axios({
+      method: 'get',
+      url: url,
+      responseType: 'stream',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': '*/*',
+        'Referer': url // Giả lập referer để tránh chặn từ CDN
       }
     });
 
-    // Trả về kết quả từ Catbox
+    // Lưu file tạm thời
+    const fileName = `temp-${Date.now()}${path.extname(url) || '.tmp'}`;
+    const filePath = path.join(TEMP_DIR, fileName);
+    const fileStream = fs.createWriteStream(filePath);
+    response.data.pipe(fileStream);
+
+    // Đợi file tải xong
+    await new Promise((resolve, reject) => {
+      fileStream.on('finish', resolve);
+      fileStream.on('error', reject);
+    });
+
+    // Upload file lên Catbox
+    const form = new FormData();
+    form.append('reqtype', 'fileupload');
+    form.append('fileToUpload', fs.createReadStream(filePath));
+
+    const uploadResponse = await axios.post('https://catbox.moe/user/api.php', form, {
+      headers: {
+        ...form.getHeaders()
+      }
+    });
+
+    // Xóa file tạm sau khi upload
+    fs.unlinkSync(filePath);
+
+    // Trả về kết quả
     res.json({
       success: true,
-      data: response.data
+      data: uploadResponse.data
     });
   } catch (error) {
     // Xử lý lỗi
