@@ -24,9 +24,6 @@ axiosRetry(axios, {
   retryCondition: (error) => error.response?.status === 403 || error.code === 'ECONNABORTED'
 });
 
-// ZenRows API Key
-const ZENROWS_API_KEY = 'e879dc413ddc8a6e42e13633481d7a58d0716e69';
-
 // Route API upload
 app.get('/upload', async (req, res) => {
   let { url } = req.query;
@@ -38,70 +35,77 @@ app.get('/upload', async (req, res) => {
 
   let filePath;
   try {
-    // Tải nội dung từ URL qua ZenRows Universal Scraper API
-    const zenrowsResponse = await axios.get(`https://api.zenrows.com/v1/`, {
-      params: {
-        url: encodeURIComponent(url),
-        apikey: ZENROWS_API_KEY,
-        js_render: 'true',
-        premium_proxy: 'true',
-        antibot: 'true', // Thêm để bypass anti-bot mạnh như Cloudflare
-        wait: '3000' // Chờ 3s để render JS đầy đủ
-      },
+    // Tải nội dung từ URL bằng axios
+    const response = await axios({
+      method: 'get',
+      url: url,
+      responseType: 'stream',
       headers: {
         'User-Agent': 'axios' // Giữ đơn giản như lệnh MiraiV2
       },
-      timeout: 30000
-    });
-    const html = zenrowsResponse.data;
-
-    // Parse HTML với cheerio
-    const $ = cheerio.load(html);
-
-    // Extract media URLs - Mở rộng để hỗ trợ nhiều loại tag
-    const mediaUrls = [];
-    $('video source').each((i, el) => mediaUrls.push($(el).attr('src')));
-    $('video').each((i, el) => mediaUrls.push($(el).attr('src')));
-    $('meta[property="og:video"]').each((i, el) => mediaUrls.push($(el).attr('content')));
-    $('meta[property="og:video:secure_url"]').each((i, el) => mediaUrls.push($(el).attr('content')));
-    $('meta[name="twitter:player:stream"]').each((i, el) => mediaUrls.push($(el).attr('content')));
-    $('img').each((i, el) => mediaUrls.push($(el).attr('src')));
-    $('meta[property="og:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
-    $('meta[name="twitter:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
-    $('audio source').each((i, el) => mediaUrls.push($(el).attr('src')));
-    $('audio').each((i, el) => mediaUrls.push($(el).attr('src')));
-    $('meta[name="twitter:player"]').each((i, el) => mediaUrls.push($(el).attr('content')));
-    $('link[rel="canonical"]').each((i, el) => {
-      const href = $(el).attr('href');
-      if (href && (href.includes('.mp4') || href.includes('.jpg') || href.includes('.png') || href.includes('.mp3'))) mediaUrls.push(href);
-    });
-
-    // Lọc và chọn URL đầu tiên hợp lệ
-    let extractedUrl = mediaUrls.find(u => u && (u.includes('.mp4') || u.includes('.webm') || u.includes('.mov'))) ||
-                       mediaUrls.find(u => u && (u.includes('.jpg') || u.includes('.png') || u.includes('.gif') || u.includes('.jpeg'))) ||
-                       mediaUrls.find(u => u && (u.includes('.mp3'))) ||
-                       mediaUrls.find(u => u && (u.startsWith('http') || u.startsWith('/')));
-    if (extractedUrl) {
-      if (!extractedUrl.startsWith('http')) {
-        extractedUrl = new URL(extractedUrl, url).href;
-      }
-    } else {
-      throw new Error('No media found in page');
-    }
-
-    // Tải media từ extractedUrl bằng Axios (giống lệnh stream MiraiV2)
-    const mediaResponse = await axios({
-      method: 'get',
-      url: extractedUrl,
-      responseType: 'stream',
-      headers: {
-        'User-Agent': 'axios' // Giữ đơn giản để tránh 403
-      },
       timeout: 10000
     });
-    const stream = mediaResponse.data;
-    const contentType = mediaResponse.headers['content-type'];
-    url = extractedUrl; // Cập nhật url để lấy ext
+
+    const contentType = response.headers['content-type'];
+    let isHtml = contentType.includes('text/html');
+    let stream = response.data;
+
+    if (isHtml) {
+      // Đọc stream thành string nếu là HTML
+      let html = '';
+      stream.on('data', chunk => html += chunk.toString());
+      await new Promise((resolve, reject) => {
+        stream.on('end', resolve);
+        stream.on('error', reject);
+      });
+
+      // Parse HTML với cheerio
+      const $ = cheerio.load(html);
+
+      // Extract media URLs - Mở rộng để hỗ trợ nhiều loại tag
+      const mediaUrls = [];
+      $('video source').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('video').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('meta[property="og:video"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('meta[property="og:video:secure_url"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('meta[name="twitter:player:stream"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('img').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('meta[property="og:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('meta[name="twitter:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('audio source').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('audio').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('meta[name="twitter:player"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('link[rel="canonical"]').each((i, el) => {
+        const href = $(el).attr('href');
+        if (href && (href.includes('.mp4') || href.includes('.jpg') || href.includes('.png') || href.includes('.mp3'))) mediaUrls.push(href);
+      });
+
+      // Lọc và chọn URL đầu tiên hợp lệ
+      let extractedUrl = mediaUrls.find(u => u && (u.includes('.mp4') || u.includes('.webm') || u.includes('.mov'))) ||
+                         mediaUrls.find(u => u && (u.includes('.jpg') || u.includes('.png') || u.includes('.gif') || u.includes('.jpeg'))) ||
+                         mediaUrls.find(u => u && (u.includes('.mp3'))) ||
+                         mediaUrls.find(u => u && (u.startsWith('http') || u.startsWith('/')));
+      if (extractedUrl) {
+        if (!extractedUrl.startsWith('http')) {
+          extractedUrl = new URL(extractedUrl, url).href;
+        }
+      } else {
+        throw new Error('No media found in page');
+      }
+
+      // Tải media từ extractedUrl
+      const mediaResponse = await axios({
+        method: 'get',
+        url: extractedUrl,
+        responseType: 'stream',
+        headers: {
+          'User-Agent': 'axios' // Giữ đơn giản
+        },
+        timeout: 10000
+      });
+      stream = mediaResponse.data;
+      url = extractedUrl; // Cập nhật url để lấy ext
+    }
 
     // Xác định định dạng file từ content-type hoặc URL
     let ext = path.extname(new URL(url).pathname) || '.tmp';
