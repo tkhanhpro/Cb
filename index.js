@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const FormData = require('form-data');
 const cheerio = require('cheerio');
-const axiosRetry = require('axios-retry');
+const axiosRetry = require('axios-retry').default;
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -20,12 +20,12 @@ if (!fs.existsSync(TEMP_DIR)) {
 // Cấu hình retry cho axios
 axiosRetry(axios, {
   retries: 3,
-  retryDelay: axiosRetry.exponentialDelay,
+  retryDelay: (retryCount) => retryCount * 1000, // Delay: 1s, 2s, 3s
   retryCondition: (error) => error.response?.status === 403 || error.code === 'ECONNABORTED'
 });
 
-// ZenRows API Key (thay bằng key của bạn)
-const ZENROWS_API_KEY = 'your_zenrows_api_key'; // Đăng ký tại https://www.zenrows.com/
+// ZenRows API Key
+const ZENROWS_API_KEY = 'e879dc413ddc8a6e42e13633481d7a58d0716e69';
 
 // Route API upload
 app.get('/upload', async (req, res) => {
@@ -38,8 +38,16 @@ app.get('/upload', async (req, res) => {
 
   let filePath;
   try {
-    // Tải nội dung từ URL qua ZenRows để render JS và bypass anti-bot
-    const zenrowsResponse = await axios.get(`https://api.zenrows.com/v1/?apikey=${ZENROWS_API_KEY}&url=${encodeURIComponent(url)}&js_render=true&premium_proxy=true`, {
+    // Tải nội dung từ URL qua ZenRows Universal Scraper API
+    const zenrowsResponse = await axios.get(`https://api.zenrows.com/v1/`, {
+      params: {
+        url: encodeURIComponent(url),
+        apikey: ZENROWS_API_KEY,
+        js_render: 'true',
+        premium_proxy: 'true',
+        antibot: 'true', // Thêm để bypass anti-bot mạnh như Cloudflare
+        wait: '3000' // Chờ 3s để render JS đầy đủ
+      },
       headers: {
         'User-Agent': 'axios' // Giữ đơn giản như lệnh MiraiV2
       },
@@ -68,7 +76,7 @@ app.get('/upload', async (req, res) => {
       if (href && (href.includes('.mp4') || href.includes('.jpg') || href.includes('.png') || href.includes('.mp3'))) mediaUrls.push(href);
     });
 
-    // Lọc và chọn URL đầu tiên hợp lệ (ưu tiên video, rồi hình, rồi bất kỳ media)
+    // Lọc và chọn URL đầu tiên hợp lệ
     let extractedUrl = mediaUrls.find(u => u && (u.includes('.mp4') || u.includes('.webm') || u.includes('.mov'))) ||
                        mediaUrls.find(u => u && (u.includes('.jpg') || u.includes('.png') || u.includes('.gif') || u.includes('.jpeg'))) ||
                        mediaUrls.find(u => u && (u.includes('.mp3'))) ||
@@ -95,7 +103,7 @@ app.get('/upload', async (req, res) => {
     const contentType = mediaResponse.headers['content-type'];
     url = extractedUrl; // Cập nhật url để lấy ext
 
-    // Xác định định dạng file từ content-type hoặc URL (giống lệnh stream)
+    // Xác định định dạng file từ content-type hoặc URL
     let ext = path.extname(new URL(url).pathname) || '.tmp';
     if (contentType.includes('image')) ext = contentType.includes('png') ? '.png' : contentType.includes('jpeg') ? '.jpg' : '.jpg';
     else if (contentType.includes('video')) ext = '.mp4';
