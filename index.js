@@ -13,7 +13,7 @@ app.use(express.json());
 // Thư mục tạm để lưu file
 const TEMP_DIR = path.join(__dirname, 'temp');
 if (!fs.existsSync(TEMP_DIR)) {
-  fs.mkdirSync(TEMP_DIR);
+  fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
 // Danh sách User-Agent để xoay vòng
@@ -28,13 +28,6 @@ const getRandomUserAgent = () => {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 };
 
-// Hàm generate token cho Twitter undocumented API
-function getToken(id) {
-  return ((Number(id) / 1e15) * Math.PI)
-    .toString(6 ** 2)
-    .replace(/(0+|\.)/g, '');
-}
-
 // Route API upload
 app.get('/upload', async (req, res) => {
   let { url } = req.query;
@@ -46,38 +39,6 @@ app.get('/upload', async (req, res) => {
 
   let filePath;
   try {
-    // Xử lý đặc biệt cho Twitter/X
-    if ((url.includes('twitter.com') || url.includes('x.com')) && url.includes('/status/')) {
-      const parts = new URL(url).pathname.split('/');
-      const tweetId = parts[parts.length - 1];
-      const token = getToken(tweetId);
-      const apiUrl = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=${token}&lang=en`;
-      const apiResponse = await axios.get(apiUrl, {
-        headers: {
-          'User-Agent': getRandomUserAgent(),
-        }
-      });
-      const tweetData = apiResponse.data;
-
-      let mediaUrl;
-      if (tweetData.mediaDetails && tweetData.mediaDetails.length > 0) {
-        const media = tweetData.mediaDetails[0];
-        if (media.type === 'video' || media.type === 'animated_gif') {
-          const variants = media.videoVariants || [];
-          const bestVariant = variants.reduce((prev, curr) => (curr.bitrate > prev.bitrate ? curr : prev), {bitrate: 0, url: ''});
-          mediaUrl = bestVariant.url;
-        } else if (media.type === 'photo') {
-          mediaUrl = media.expandedUrl;
-        }
-      }
-
-      if (mediaUrl) {
-        url = mediaUrl; // Chuyển sang tải media trực tiếp
-      } else {
-        throw new Error('No media found in tweet');
-      }
-    }
-
     // Tải nội dung từ URL
     const response = await axios({
       method: 'get',
@@ -94,7 +55,6 @@ app.get('/upload', async (req, res) => {
     });
 
     const contentType = response.headers['content-type'];
-
     let isHtml = contentType.includes('text/html');
     let stream = response.data;
 
@@ -110,19 +70,36 @@ app.get('/upload', async (req, res) => {
       // Parse HTML với cheerio
       const $ = cheerio.load(html);
 
-      // Extract media URLs
+      // Extract media URLs - Mở rộng để hỗ trợ nhiều loại tag hơn cho các mạng xã hội khác nhau
       const mediaUrls = [];
+      // Video tags
       $('video source').each((i, el) => mediaUrls.push($(el).attr('src')));
       $('video').each((i, el) => mediaUrls.push($(el).attr('src')));
-      $('img').each((i, el) => mediaUrls.push($(el).attr('src')));
       $('meta[property="og:video"]').each((i, el) => mediaUrls.push($(el).attr('content')));
       $('meta[property="og:video:secure_url"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('meta[name="twitter:player:stream"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      // Image tags
+      $('img').each((i, el) => mediaUrls.push($(el).attr('src')));
       $('meta[property="og:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('meta[name="twitter:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      // Audio or other media
+      $('audio source').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('audio').each((i, el) => mediaUrls.push($(el).attr('src')));
+      // Additional for TikTok, Instagram, etc.
+      $('meta[name="twitter:player"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('link[rel="canonical"]').each((i, el) => {
+        const href = $(el).attr('href');
+        if (href && (href.includes('.mp4') || href.includes('.jpg') || href.includes('.png'))) mediaUrls.push(href);
+      });
 
-      // Lọc và chọn URL đầu tiên hợp lệ
-      let extractedUrl = mediaUrls.find(u => u && (u.startsWith('http') || u.startsWith('/')));
+      // Lọc và chọn URL đầu tiên hợp lệ (ưu tiên video nếu có)
+      let extractedUrl = mediaUrls.find(u => u && (u.includes('.mp4') || u.includes('.webm') || u.includes('.mov'))) ||
+                         mediaUrls.find(u => u && (u.includes('.jpg') || u.includes('.png') || u.includes('.gif') || u.includes('.jpeg'))) ||
+                         mediaUrls.find(u => u && (u.startsWith('http') || u.startsWith('/')));
       if (extractedUrl) {
-        extractedUrl = new URL(extractedUrl, url).href;
+        if (!extractedUrl.startsWith('http')) {
+          extractedUrl = new URL(extractedUrl, url).href;
+        }
       } else {
         throw new Error('No media found in page');
       }
@@ -142,10 +119,16 @@ app.get('/upload', async (req, res) => {
         timeout: 10000
       });
       stream = mediaResponse.data;
+      url = extractedUrl; // Cập nhật url để lấy ext
     }
 
+    // Xác định định dạng file từ content-type hoặc URL
+    let ext = path.extname(new URL(url).pathname) || '.tmp';
+    if (contentType.includes('image')) ext = contentType.includes('png') ? '.png' : contentType.includes('jpeg') ? '.jpg' : '.jpg';
+    else if (contentType.includes('video')) ext = '.mp4';
+    else if (contentType.includes('audio')) ext = '.mp3';
+
     // Lưu file tạm thời
-    const ext = path.extname(new URL(url).pathname) || '.tmp';
     const fileName = `temp-${Date.now()}${ext}`;
     filePath = path.join(TEMP_DIR, fileName);
     const fileStream = fs.createWriteStream(filePath);
