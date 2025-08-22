@@ -3,6 +3,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const FormData = require('form-data');
+const cheerio = require('cheerio');
 const app = express();
 const port = 3000;
 
@@ -27,50 +28,128 @@ const getRandomUserAgent = () => {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 };
 
+// Hàm generate token cho Twitter undocumented API
+function getToken(id) {
+  return ((Number(id) / 1e15) * Math.PI)
+    .toString(6 ** 2)
+    .replace(/(0+|\.)/g, '');
+}
+
 // Route API upload
 app.get('/upload', async (req, res) => {
-  const { url } = req.query;
+  let { url } = req.query;
 
   // Kiểm tra xem url có được cung cấp không
   if (!url) {
     return res.status(400).json({ success: false, error: 'URL is required' });
   }
 
-  // Kiểm tra định dạng file từ URL
-  const validExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.mp4', '.webm'];
-  const ext = path.extname(url).toLowerCase();
-  if (!validExtensions.includes(ext)) {
-    return res.status(400).json({ success: false, error: `Unsupported file extension: ${ext}. Supported: ${validExtensions.join(', ')}` });
-  }
-
   let filePath;
   try {
-    // Tải file từ URL về server
+    // Xử lý đặc biệt cho Twitter/X
+    if ((url.includes('twitter.com') || url.includes('x.com')) && url.includes('/status/')) {
+      const parts = new URL(url).pathname.split('/');
+      const tweetId = parts[parts.length - 1];
+      const token = getToken(tweetId);
+      const apiUrl = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=${token}&lang=en`;
+      const apiResponse = await axios.get(apiUrl, {
+        headers: {
+          'User-Agent': getRandomUserAgent(),
+        }
+      });
+      const tweetData = apiResponse.data;
+
+      let mediaUrl;
+      if (tweetData.mediaDetails && tweetData.mediaDetails.length > 0) {
+        const media = tweetData.mediaDetails[0];
+        if (media.type === 'video' || media.type === 'animated_gif') {
+          const variants = media.videoVariants || [];
+          const bestVariant = variants.reduce((prev, curr) => (curr.bitrate > prev.bitrate ? curr : prev), {bitrate: 0, url: ''});
+          mediaUrl = bestVariant.url;
+        } else if (media.type === 'photo') {
+          mediaUrl = media.expandedUrl;
+        }
+      }
+
+      if (mediaUrl) {
+        url = mediaUrl; // Chuyển sang tải media trực tiếp
+      } else {
+        throw new Error('No media found in tweet');
+      }
+    }
+
+    // Tải nội dung từ URL
     const response = await axios({
       method: 'get',
       url: url,
       responseType: 'stream',
       headers: {
         'User-Agent': getRandomUserAgent(),
-        'Accept': 'image/*,video/*',
-        'Referer': new URL(url).origin, // Sử dụng origin của URL làm Referer
+        'Accept': '*/*',
+        'Referer': new URL(url).origin,
         'Accept-Language': 'en-US,en;q=0.9',
         'Connection': 'keep-alive'
       },
-      timeout: 10000 // Timeout 10 giây
+      timeout: 10000
     });
 
-    // Kiểm tra Content-Type để đảm bảo file hợp lệ
     const contentType = response.headers['content-type'];
-    if (!contentType.startsWith('image/') && !contentType.startsWith('video/')) {
-      return res.status(400).json({ success: false, error: `Invalid content type: ${contentType}` });
+
+    let isHtml = contentType.includes('text/html');
+    let stream = response.data;
+
+    if (isHtml) {
+      // Đọc stream thành string nếu là HTML
+      let html = '';
+      stream.on('data', chunk => html += chunk.toString());
+      await new Promise((resolve, reject) => {
+        stream.on('end', resolve);
+        stream.on('error', reject);
+      });
+
+      // Parse HTML với cheerio
+      const $ = cheerio.load(html);
+
+      // Extract media URLs
+      const mediaUrls = [];
+      $('video source').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('video').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('img').each((i, el) => mediaUrls.push($(el).attr('src')));
+      $('meta[property="og:video"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('meta[property="og:video:secure_url"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+      $('meta[property="og:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
+
+      // Lọc và chọn URL đầu tiên hợp lệ
+      let extractedUrl = mediaUrls.find(u => u && (u.startsWith('http') || u.startsWith('/')));
+      if (extractedUrl) {
+        extractedUrl = new URL(extractedUrl, url).href;
+      } else {
+        throw new Error('No media found in page');
+      }
+
+      // Tải stream từ extractedUrl
+      const mediaResponse = await axios({
+        method: 'get',
+        url: extractedUrl,
+        responseType: 'stream',
+        headers: {
+          'User-Agent': getRandomUserAgent(),
+          'Accept': '*/*',
+          'Referer': new URL(extractedUrl).origin,
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Connection': 'keep-alive'
+        },
+        timeout: 10000
+      });
+      stream = mediaResponse.data;
     }
 
     // Lưu file tạm thời
+    const ext = path.extname(new URL(url).pathname) || '.tmp';
     const fileName = `temp-${Date.now()}${ext}`;
     filePath = path.join(TEMP_DIR, fileName);
     const fileStream = fs.createWriteStream(filePath);
-    response.data.pipe(fileStream);
+    stream.pipe(fileStream);
 
     // Đợi file tải xong
     await new Promise((resolve, reject) => {
