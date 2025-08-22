@@ -16,18 +16,6 @@ if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
-// Danh sách User-Agent để xoay vòng
-const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-];
-
-// Hàm chọn User-Agent ngẫu nhiên
-const getRandomUserAgent = () => {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-};
-
 // Route API upload
 app.get('/upload', async (req, res) => {
   let { url } = req.query;
@@ -39,19 +27,20 @@ app.get('/upload', async (req, res) => {
 
   let filePath;
   try {
+    // Header đơn giản giống lệnh stream MiraiV2
+    const simpleHeaders = {
+      'User-Agent': 'axios'  // Chính xác như lệnh của bạn, tránh giả mạo browser
+    };
+
     // Tải nội dung từ URL
     const response = await axios({
       method: 'get',
       url: url,
       responseType: 'stream',
-      headers: {
-        'User-Agent': getRandomUserAgent(),
-        'Accept': '*/*',
-        'Referer': new URL(url).origin,
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Connection': 'keep-alive'
-      },
+      headers: simpleHeaders,
       timeout: 10000
+      // Nếu vẫn 403, uncomment và dùng proxy (thay bằng proxy của bạn)
+      // proxy: { host: 'your.proxy.host', port: 8080 }
     });
 
     const contentType = response.headers['content-type'];
@@ -70,31 +59,28 @@ app.get('/upload', async (req, res) => {
       // Parse HTML với cheerio
       const $ = cheerio.load(html);
 
-      // Extract media URLs - Mở rộng để hỗ trợ nhiều loại tag hơn cho các mạng xã hội khác nhau
+      // Extract media URLs - Mở rộng để hỗ trợ nhiều loại tag
       const mediaUrls = [];
-      // Video tags
       $('video source').each((i, el) => mediaUrls.push($(el).attr('src')));
       $('video').each((i, el) => mediaUrls.push($(el).attr('src')));
       $('meta[property="og:video"]').each((i, el) => mediaUrls.push($(el).attr('content')));
       $('meta[property="og:video:secure_url"]').each((i, el) => mediaUrls.push($(el).attr('content')));
       $('meta[name="twitter:player:stream"]').each((i, el) => mediaUrls.push($(el).attr('content')));
-      // Image tags
       $('img').each((i, el) => mediaUrls.push($(el).attr('src')));
       $('meta[property="og:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
       $('meta[name="twitter:image"]').each((i, el) => mediaUrls.push($(el).attr('content')));
-      // Audio or other media
       $('audio source').each((i, el) => mediaUrls.push($(el).attr('src')));
       $('audio').each((i, el) => mediaUrls.push($(el).attr('src')));
-      // Additional for TikTok, Instagram, etc.
       $('meta[name="twitter:player"]').each((i, el) => mediaUrls.push($(el).attr('content')));
       $('link[rel="canonical"]').each((i, el) => {
         const href = $(el).attr('href');
-        if (href && (href.includes('.mp4') || href.includes('.jpg') || href.includes('.png'))) mediaUrls.push(href);
+        if (href && (href.includes('.mp4') || href.includes('.jpg') || href.includes('.png') || href.includes('.mp3'))) mediaUrls.push(href);
       });
 
-      // Lọc và chọn URL đầu tiên hợp lệ (ưu tiên video nếu có)
+      // Lọc và chọn URL đầu tiên hợp lệ (ưu tiên video, rồi hình, rồi bất kỳ media)
       let extractedUrl = mediaUrls.find(u => u && (u.includes('.mp4') || u.includes('.webm') || u.includes('.mov'))) ||
                          mediaUrls.find(u => u && (u.includes('.jpg') || u.includes('.png') || u.includes('.gif') || u.includes('.jpeg'))) ||
+                         mediaUrls.find(u => u && (u.includes('.mp3'))) ||
                          mediaUrls.find(u => u && (u.startsWith('http') || u.startsWith('/')));
       if (extractedUrl) {
         if (!extractedUrl.startsWith('http')) {
@@ -104,25 +90,20 @@ app.get('/upload', async (req, res) => {
         throw new Error('No media found in page');
       }
 
-      // Tải stream từ extractedUrl
+      // Tải stream từ extractedUrl với header đơn giản
       const mediaResponse = await axios({
         method: 'get',
         url: extractedUrl,
         responseType: 'stream',
-        headers: {
-          'User-Agent': getRandomUserAgent(),
-          'Accept': '*/*',
-          'Referer': new URL(extractedUrl).origin,
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Connection': 'keep-alive'
-        },
+        headers: simpleHeaders,
         timeout: 10000
+        // proxy: { host: 'your.proxy.host', port: 8080 } // Nếu cần
       });
       stream = mediaResponse.data;
       url = extractedUrl; // Cập nhật url để lấy ext
     }
 
-    // Xác định định dạng file từ content-type hoặc URL
+    // Xác định định dạng file từ content-type hoặc URL (giống lệnh stream)
     let ext = path.extname(new URL(url).pathname) || '.tmp';
     if (contentType.includes('image')) ext = contentType.includes('png') ? '.png' : contentType.includes('jpeg') ? '.jpg' : '.jpg';
     else if (contentType.includes('video')) ext = '.mp4';
