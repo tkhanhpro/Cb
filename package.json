@@ -1,0 +1,15 @@
+{
+  "name": "catbox-upload-api",
+  "version": "1.0.0",
+  "description": "API to upload files to Catbox via URL",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.7.2",
+    "express": "^4.19.2"
+  }
+}
