@@ -1,11 +1,12 @@
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs'); // Sử dụng fs thông thường cho stream và các hàm khác
-const fsPromises = require('fs').promises; // Sử dụng fs.promises cho các thao tác async
+const fs = require('fs');
+const fsPromises = require('fs').promises;
 const path = require('path');
 const FormData = require('form-data');
+
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 // Middleware để parse JSON
 app.use(express.json());
@@ -36,21 +37,21 @@ app.get('/upload', async (req, res) => {
 
   // Kiểm tra URL
   if (!url) {
-    return res.status(400).json({ error: 'Yêu cầu cung cấp URL' });
+    return res.status(400).json({ success: false, error: 'Yêu cầu cung cấp URL' });
   }
 
   // Giải mã URL nếu được encode
   try {
     url = decodeURIComponent(url);
   } catch (error) {
-    return res.status(400).json({ error: 'URL không hợp lệ (lỗi giải mã)' });
+    return res.status(400).json({ success: false, error: 'URL không hợp lệ (lỗi giải mã)' });
   }
 
   // Kiểm tra định dạng URL
   try {
     new URL(url);
   } catch (error) {
-    return res.status(400).json({ error: 'Định dạng URL không hợp lệ' });
+    return res.status(400).json({ success: false, error: 'Định dạng URL không hợp lệ' });
   }
 
   const fileName = `temp-${Date.now()}${path.extname(url.split('?')[0]) || '.tmp'}`;
@@ -99,13 +100,13 @@ app.get('/upload', async (req, res) => {
 
     await downloadFile();
 
-    // Hàm upload lên Catbox với cơ chế thử lại, sử dụng stream để tránh đọc toàn bộ file vào memory
+    // Hàm upload lên Catbox với cơ chế thử lại
     const uploadToCatbox = async (retryCount = 3) => {
       for (let i = 0; i < retryCount; i++) {
         try {
           const form = new FormData();
           form.append('reqtype', 'fileupload');
-          form.append('fileToUpload', fs.createReadStream(filePath)); // Sử dụng createReadStream để stream file
+          form.append('fileToUpload', fs.createReadStream(filePath));
 
           const uploadResponse = await axiosInstance.post(
             'https://catbox.moe/user/api.php',
@@ -138,7 +139,7 @@ app.get('/upload', async (req, res) => {
 
     res.json({
       success: true,
-      data: result,
+      url: result, // Trả về URL từ Catbox
     });
   } catch (error) {
     // Xử lý lỗi và xóa file tạm
