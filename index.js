@@ -1,31 +1,32 @@
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs').promises;
+const fs = require('fs'); // Sử dụng fs thông thường cho stream và các hàm khác
+const fsPromises = require('fs').promises; // Sử dụng fs.promises cho các thao tác async
 const path = require('path');
 const FormData = require('form-data');
 const app = express();
 const port = 3000;
 
-// Middleware
+// Middleware để parse JSON
 app.use(express.json());
 
-// Temp directory setup
+// Thư mục tạm để lưu file
 const TEMP_DIR = path.join(__dirname, 'temp');
 const ensureTempDir = async () => {
   try {
-    await fs.mkdir(TEMP_DIR, { recursive: true });
+    await fsPromises.mkdir(TEMP_DIR, { recursive: true });
   } catch (error) {
-    console.error('Error creating temp directory:', error);
+    console.error('Lỗi khi tạo thư mục tạm:', error);
   }
 };
 
-// Initialize temp directory
+// Khởi tạo thư mục tạm
 ensureTempDir();
 
-// Enhanced error handling for axios
+// Tạo instance axios với cấu hình mặc định
 const axiosInstance = axios.create({
   timeout: 30000,
-  maxContentLength: 50 * 1024 * 1024, // 50MB limit
+  maxContentLength: 50 * 1024 * 1024, // Giới hạn 50MB
   maxRedirects: 5,
 });
 
@@ -33,30 +34,30 @@ const axiosInstance = axios.create({
 app.get('/upload', async (req, res) => {
   let { url } = req.query;
 
-  // Validate and decode URL
+  // Kiểm tra URL
   if (!url) {
-    return res.status(400).json({ error: 'URL is required' });
+    return res.status(400).json({ error: 'Yêu cầu cung cấp URL' });
   }
 
-  // Decode URL if encoded
+  // Giải mã URL nếu được encode
   try {
     url = decodeURIComponent(url);
   } catch (error) {
-    return res.status(400).json({ error: 'Invalid URL encoding' });
+    return res.status(400).json({ error: 'URL không hợp lệ (lỗi giải mã)' });
   }
 
-  // Validate URL format
+  // Kiểm tra định dạng URL
   try {
     new URL(url);
   } catch (error) {
-    return res.status(400).json({ error: 'Invalid URL format' });
+    return res.status(400).json({ error: 'Định dạng URL không hợp lệ' });
   }
 
   const fileName = `temp-${Date.now()}${path.extname(url.split('?')[0]) || '.tmp'}`;
   const filePath = path.join(TEMP_DIR, fileName);
 
   try {
-    // Download file with retry mechanism
+    // Hàm tải file với cơ chế thử lại
     const downloadFile = async (retryCount = 3) => {
       for (let i = 0; i < retryCount; i++) {
         try {
@@ -73,13 +74,13 @@ app.get('/upload', async (req, res) => {
             },
           });
 
-          // Check content type
+          // Kiểm tra content type
           const contentType = response.headers['content-type'];
           if (!contentType || contentType.includes('text/html')) {
-            throw new Error('Invalid content type received');
+            throw new Error('Nhận được loại nội dung không hợp lệ');
           }
 
-          // Save file
+          // Lưu file bằng fs.createWriteStream
           const fileStream = fs.createWriteStream(filePath);
           response.data.pipe(fileStream);
 
@@ -98,13 +99,13 @@ app.get('/upload', async (req, res) => {
 
     await downloadFile();
 
-    // Upload to Catbox with retry
+    // Hàm upload lên Catbox với cơ chế thử lại, sử dụng stream để tránh đọc toàn bộ file vào memory
     const uploadToCatbox = async (retryCount = 3) => {
       for (let i = 0; i < retryCount; i++) {
         try {
           const form = new FormData();
           form.append('reqtype', 'fileupload');
-          form.append('fileToUpload', await fs.readFile(filePath));
+          form.append('fileToUpload', fs.createReadStream(filePath)); // Sử dụng createReadStream để stream file
 
           const uploadResponse = await axiosInstance.post(
             'https://catbox.moe/user/api.php',
@@ -117,9 +118,9 @@ app.get('/upload', async (req, res) => {
             }
           );
 
-          // Validate Catbox response
+          // Kiểm tra phản hồi từ Catbox
           if (!uploadResponse.data || uploadResponse.data.includes('error')) {
-            throw new Error('Catbox upload failed');
+            throw new Error('Tải lên Catbox thất bại');
           }
 
           return uploadResponse.data;
@@ -132,27 +133,27 @@ app.get('/upload', async (req, res) => {
 
     const result = await uploadToCatbox();
 
-    // Cleanup
-    await fs.unlink(filePath).catch(() => {});
+    // Xóa file tạm
+    await fsPromises.unlink(filePath).catch(() => {});
 
     res.json({
       success: true,
       data: result,
     });
   } catch (error) {
-    // Enhanced error handling
-    await fs.unlink(filePath).catch(() => {});
+    // Xử lý lỗi và xóa file tạm
+    await fsPromises.unlink(filePath).catch(() => {});
 
     let statusCode = 500;
-    let errorMessage = 'Internal server error';
+    let errorMessage = 'Lỗi server nội bộ';
 
     if (error.response) {
       statusCode = error.response.status;
-      errorMessage = error.response.status === 412 
-        ? 'Precondition Failed: Invalid or blocked URL'
+      errorMessage = error.response.status === 412
+        ? 'Lỗi 412: URL không hợp lệ hoặc bị chặn'
         : error.response.data?.message || error.message;
     } else if (error.request) {
-      errorMessage = 'No response received from the server';
+      errorMessage = 'Không nhận được phản hồi từ server';
     } else {
       errorMessage = error.message;
     }
@@ -164,34 +165,34 @@ app.get('/upload', async (req, res) => {
   }
 });
 
-// Periodic cleanup of temp directory
+// Dọn dẹp thư mục tạm định kỳ
 setInterval(async () => {
   try {
-    const files = await fs.readdir(TEMP_DIR);
+    const files = await fsPromises.readdir(TEMP_DIR);
     const now = Date.now();
     for (const file of files) {
       const filePath = path.join(TEMP_DIR, file);
-      const stats = await fs.stat(filePath);
-      // Delete files older than 1 hour
+      const stats = await fsPromises.stat(filePath);
+      // Xóa file cũ hơn 1 giờ
       if (now - stats.mtimeMs > 3600000) {
-        await fs.unlink(filePath);
+        await fsPromises.unlink(filePath);
       }
     }
   } catch (error) {
-    console.error('Error cleaning temp directory:', error);
+    console.error('Lỗi khi dọn dẹp thư mục tạm:', error);
   }
-}, 3600000); // Run every hour
+}, 3600000); // Chạy mỗi giờ
 
-// Error handling middleware
+// Middleware xử lý lỗi
 app.use((err, req, res, next) => {
-  console.error('Unexpected error:', err);
+  console.error('Lỗi không mong muốn:', err);
   res.status(500).json({
     success: false,
-    error: 'Unexpected server error',
+    error: 'Lỗi server không mong muốn',
   });
 });
 
-// Start server
+// Khởi động server
 app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+  console.log(`Server đang chạy tại http://localhost:${port}`);
 });
