@@ -6,13 +6,15 @@ const path = require('path');
 const FormData = require('form-data');
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 6141;
 
 // Middleware để parse JSON
 app.use(express.json());
 
 // Thư mục tạm để lưu file
 const TEMP_DIR = path.join(__dirname, 'temp');
+const CATBOX_USERHASH = 'f052331bcda6c8be4002427be'; // Userhash của bạn
+
 const ensureTempDir = async () => {
   try {
     await fsPromises.mkdir(TEMP_DIR, { recursive: true });
@@ -106,6 +108,7 @@ app.get('/upload', async (req, res) => {
         try {
           const form = new FormData();
           form.append('reqtype', 'fileupload');
+          form.append('userhash', CATBOX_USERHASH); // Thêm userhash của bạn
           form.append('fileToUpload', fs.createReadStream(filePath));
 
           const uploadResponse = await axiosInstance.post(
@@ -121,7 +124,7 @@ app.get('/upload', async (req, res) => {
 
           // Kiểm tra phản hồi từ Catbox
           if (!uploadResponse.data || uploadResponse.data.includes('error')) {
-            throw new Error('Tải lên Catbox thất bại');
+            throw new Error(`Tải lên Catbox thất bại: ${uploadResponse.data}`);
           }
 
           return uploadResponse.data;
