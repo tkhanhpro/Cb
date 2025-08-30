@@ -6,14 +6,14 @@ const path = require('path');
 const FormData = require('form-data');
 
 const app = express();
-const port = process.env.PORT || 6141;
+const port = process.env.PORT || 3000;
 
 // Middleware để parse JSON
 app.use(express.json());
 
 // Thư mục tạm để lưu file
 const TEMP_DIR = path.join(__dirname, 'temp');
-const CATBOX_USERHASH = 'f052331bcda6c8be4002427be'; // Userhash của bạn
+const CATBOX_USERHASH = '4abd140f8e936cdb0b2cc2dd4'; // Userhash của bạn
 
 const ensureTempDir = async () => {
   try {
