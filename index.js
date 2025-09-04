@@ -7,8 +7,8 @@ const FormData = require('form-data');
 
 const app = express();
 const port = process.env.PORT || 3000;
-
-// Middleware để parse JSON
+// Phục vụ file tĩnh từ thư mục public
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
 // Thư mục tạm để lưu file
