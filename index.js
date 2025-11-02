@@ -13,7 +13,7 @@ app.use(express.json());
 
 // Thư mục tạm để lưu file
 const TEMP_DIR = path.join(__dirname, 'temp');
-const CATBOX_USERHASH = '4abd140f8e936cdb0b2cc2dd4'; // Userhash của bạn
+const CATBOX_USERHASH = 'c39384878f14bb678aa6de665'; // Userhash của bạn
 
 const ensureTempDir = async () => {
   try {
